@@ -1,0 +1,81 @@
+# Python
+__pycache__/
+venv/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+wheels/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+parts/
+var/
+*.manifest
+*.spec
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# PyInstaller
+*.exe
+*.app
+
+# Distribution
+dist/
+build/
+
+# PyPI
+.pypirc
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ESPHost specific
+esphost/firmware/*.bin
+.esphost/
+*.spiffs.bin
+*.spiffs.img
+spiffs.bin
+
+# esptool
+*.bin.bak
+
+# Cloudflare
+cloudflared
+cloudflared.exe
+*.log
+tunnel.json
+cert.pem
+
+# Secrets
+*.env
+config.json
+credentials.json
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V3
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini

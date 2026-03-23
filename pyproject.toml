@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "esphost"
+version = "0.1.0"
+description = "Host websites directly from your ESP32 — flash, tunnel, queue, done."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["esp32", "iot", "web", "hosting", "cloudflare", "embedded"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Topic :: System :: Hardware",
+]
+dependencies = [
+    "PyQt6>=6.6.0",
+    "esptool>=4.7.0",
+    "pyserial>=3.5",
+    "flask>=3.0.0",
+    "requests>=2.31.0",
+    "littlefs-python>=0.4.0",
+    "platformio>=6.1.0",
+]
+
+[project.scripts]
+esphost = "esphost.__main__:main"
+
+[project.urls]
+Homepage   = "https://github.com/yourname/esphost"
+Issues     = "https://github.com/yourname/esphost/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["esphost*"]
+
+[tool.setuptools.package-data]
+esphost = [
+    "firmware/*.bin",
+    "firmware/*.md",
+    "assets/*",
+]
