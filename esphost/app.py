@@ -71,30 +71,48 @@ class WiFiWorker(QThread):
     def run(self):
         import json, time
         try:
+            # Step 1: send credentials then close port
             self.log_msg.emit("Opening serial to ESP32...")
             s = serial.Serial(self.port, 115200, timeout=1)
-            time.sleep(2)
+            time.sleep(1)
             cmd = json.dumps({"cmd": "setwifi", "ssid": self.ssid, "pass": self.password})
             self.log_msg.emit("Sending Wi-Fi credentials...")
             s.write((cmd + "\n").encode())
-            deadline = time.time() + 30
-            ip_pattern = re.compile(r'READY ip=([\d.]+)')
-            while time.time() < deadline:
-                line = s.readline().decode("utf-8", errors="replace").strip()
-                if line:
-                    self.log_msg.emit(line)
-                if "READY ip=" in line:
-                    m = ip_pattern.search(line)
-                    if m:
-                        s.close()
-                        self.ip_found.emit(m.group(1))
-                        return
-                if "failed" in line.lower():
-                    s.close()
-                    self.error.emit("Wi-Fi connection failed. Check SSID and password.")
-                    return
+            time.sleep(0.5)
             s.close()
-            self.error.emit("Timed out. Check Wi-Fi credentials and try again.")
+
+            # Step 2: ESP32 restarts — wait for it to reappear on serial
+            self.log_msg.emit("ESP32 restarting...")
+            time.sleep(4)
+
+            # Step 3: reopen serial and wait for READY ip=
+            self.log_msg.emit("Waiting for ESP32 to connect to Wi-Fi...")
+            ip_pattern = re.compile(r'READY ip=([\d.]+)')
+            deadline = time.time() + 40
+            s2 = None
+            while time.time() < deadline:
+                try:
+                    if s2 is None or not s2.is_open:
+                        s2 = serial.Serial(self.port, 115200, timeout=1)
+                    line = s2.readline().decode("utf-8", errors="replace").strip()
+                    if line:
+                        self.log_msg.emit(line)
+                    if "READY ip=" in line:
+                        m = ip_pattern.search(line)
+                        if m:
+                            s2.close()
+                            self.ip_found.emit(m.group(1))
+                            return
+                    if "wrong password" in line.lower() or "no ap found" in line.lower():
+                        if s2: s2.close()
+                        self.error.emit("Wi-Fi failed. Check SSID and password.")
+                        return
+                except serial.SerialException:
+                    time.sleep(1)  # port not ready yet, retry
+
+            if s2 and s2.is_open:
+                s2.close()
+            self.error.emit("Timed out waiting for ESP32. Check Wi-Fi credentials.")
         except Exception as e:
             self.error.emit(str(e))
 
@@ -182,15 +200,40 @@ class WiFiCard(QFrame):
         title = QLabel("📶  Connect ESP32 to Wi-Fi")
         title.setStyleSheet("font-size:13px;font-weight:bold;color:#e0e0e0;background:transparent;")
 
-        hint = QLabel("Enter your Wi-Fi name and password below.\nESP32 will connect automatically and get a public URL.")
+        hint = QLabel("ESP32 will join the same Wi-Fi as this computer.\nJust enter your Wi-Fi password to confirm.")
         hint.setStyleSheet("font-size:11px;color:#555;background:transparent;")
         hint.setWordWrap(True)
 
-        self.ssid_input = self._field("Wi-Fi Name (e.g. MyHomeNetwork)", False)
+        # Auto-detect SSID
+        from esphost.wifi_helper import get_current_ssid
+        detected = get_current_ssid()
+        ssid_row = QHBoxLayout()
+        ssid_label = QLabel("Wi-Fi Network:")
+        ssid_label.setStyleSheet("font-size:12px;color:#888;background:transparent;")
+        self.ssid_detected = QLabel(detected or "Not detected")
+        self.ssid_detected.setStyleSheet(f"font-size:13px;font-weight:bold;color:{'#00ff9d' if detected else '#ff4444'};background:transparent;")
+        ssid_row.addWidget(ssid_label)
+        ssid_row.addWidget(self.ssid_detected)
+        ssid_row.addStretch()
+
+        # Manual override (collapsed by default)
+        self.ssid_input = self._field(detected or "Wi-Fi Name", False)
+        self.ssid_input.setText(detected or "")
+        self.ssid_input.setVisible(not bool(detected))
+
+        toggle = QPushButton("Use a different network" if detected else "Enter network name manually")
+        toggle.setStyleSheet("QPushButton{background:transparent;color:#444;border:none;font-size:11px;text-align:left;padding:0;} QPushButton:hover{color:#00ff9d;}")
+        toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        toggle.clicked.connect(lambda: (
+            self.ssid_input.setVisible(not self.ssid_input.isVisible())
+        ))
+
         self.pass_input = self._field("Wi-Fi Password", True)
 
         layout.addWidget(title)
         layout.addWidget(hint)
+        layout.addLayout(ssid_row)
+        layout.addWidget(toggle)
         layout.addWidget(self.ssid_input)
         layout.addWidget(self.pass_input)
 
@@ -207,7 +250,8 @@ class WiFiCard(QFrame):
         return f
 
     def get_credentials(self):
-        return self.ssid_input.text().strip(), self.pass_input.text()
+        ssid = self.ssid_input.text().strip() or self.ssid_detected.text().strip()
+        return ssid, self.pass_input.text()
 
 
 class MainWindow(QMainWindow):
