@@ -79,3 +79,9 @@ credentials.json
 ehthumbs.db
 Thumbs.db
 desktop.ini
+.pio/
+__pycache__/
+*.pyc
+*.log
+.env
+.venv/
