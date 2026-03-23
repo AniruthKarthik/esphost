@@ -1,7 +1,6 @@
 import os
 import sys
 import shutil
-import struct
 import subprocess
 import tempfile
 import hashlib
@@ -11,8 +10,6 @@ import importlib.resources
 FIRMWARE_FILENAME = "esphost.bin"
 SPIFFS_OFFSET     = "0x290000"   # standard 4MB layout
 FIRMWARE_OFFSET   = "0x10000"
-BOOTLOADER_OFFSET = "0x1000"
-PARTITIONS_OFFSET = "0x8000"
 
 
 class ESPFlasher:
@@ -23,43 +20,18 @@ class ESPFlasher:
     # ── Firmware flash ────────────────────────────────────────────────────────
 
     def flash_firmware(self, progress_cb=None):
-        """Flash the bundled ESP32 firmware."""
+        """Firmware is flashed together with SPIFFS in upload_files — single connection."""
         fw_path = self._get_firmware_path()
-
         if progress_cb:
-            progress_cb(5, f"Firmware located: {fw_path}")
-
-        cmd = [
-            sys.executable, "-m", "esptool",
-            "--port", self.port,
-            "--baud", "921600",
-            "--before", "default_reset",
-            "--after",  "hard_reset",
-            "write_flash",
-            "-z",
-            "--flash_mode", "dio",
-            "--flash_freq", "80m",
-            "--flash_size", "detect",
-            FIRMWARE_OFFSET, fw_path,
-        ]
-
-        if progress_cb:
-            progress_cb(10, "Connecting to ESP32...")
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-
-        if result.returncode != 0:
-            raise RuntimeError(f"Firmware flash failed:\n{result.stderr}")
-
-        if progress_cb:
-            progress_cb(45, "Firmware flashed successfully")
+            progress_cb(10, f"Firmware located: {fw_path}")
+            progress_cb(45, "Firmware will flash with SPIFFS in one connection...")
 
     # ── SPIFFS file upload ────────────────────────────────────────────────────
 
     def upload_files(self, file_paths: list, progress_cb=None):
-        """Build SPIFFS image from files and flash to ESP32."""
+        """Build SPIFFS image and flash firmware + SPIFFS in a single esptool call."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Copy files into tmp staging dir
+            # Copy files into staging dir
             for path in file_paths:
                 dst = os.path.join(tmpdir, os.path.basename(path))
                 shutil.copy2(path, dst)
@@ -70,22 +42,21 @@ class ESPFlasher:
             spiffs_image = os.path.join(tmpdir, "spiffs.bin")
             self._build_spiffs_image(tmpdir, spiffs_image, progress_cb)
 
-            # Verify image was created
             if not os.path.exists(spiffs_image):
                 raise RuntimeError("SPIFFS image build failed")
 
             if progress_cb:
-                progress_cb(70, "Flashing SPIFFS to ESP32...")
+                progress_cb(65, "Flashing firmware + SPIFFS in single connection...")
 
-            self._flash_spiffs(spiffs_image, progress_cb)
+            self._flash_all(spiffs_image, progress_cb)
 
             if progress_cb:
                 progress_cb(95, "Verifying checksum...")
                 self._verify_checksum(file_paths, progress_cb)
-                progress_cb(100, "Upload complete")
+                progress_cb(100, "Upload complete ✓")
 
     def _build_spiffs_image(self, data_dir: str, output_img: str, progress_cb=None):
-        """Try mkspiffs, fallback to manual LittleFS-compatible image."""
+        """Try mkspiffs, fallback to littlefs-python."""
         mkspiffs = shutil.which("mkspiffs")
 
         if mkspiffs:
@@ -103,7 +74,7 @@ class ESPFlasher:
             if result.returncode == 0:
                 return
 
-        # fallback: use littlefs-python
+        # Fallback: littlefs-python
         if progress_cb:
             progress_cb(55, "Building SPIFFS image with littlefs-python...")
 
@@ -112,7 +83,7 @@ class ESPFlasher:
             fs = littlefs.LittleFS(block_size=4096, block_count=88)
             for fname in os.listdir(data_dir):
                 fpath = os.path.join(data_dir, fname)
-                if os.path.isfile(fpath):
+                if os.path.isfile(fpath) and fname != "spiffs.bin":
                     with open(fpath, "rb") as f:
                         data = f.read()
                     with fs.open(f"/{fname}", "wb") as lf:
@@ -120,27 +91,39 @@ class ESPFlasher:
             with open(output_img, "wb") as out:
                 out.write(fs.context.buffer)
         except ImportError:
-            # Last resort: raw minimal SPIFFS-like image placeholder
-            # In production, require mkspiffs or littlefs-python
             raise RuntimeError(
                 "mkspiffs not found and littlefs-python not installed.\n"
                 "Run: pip install littlefs-python"
             )
 
-    def _flash_spiffs(self, image_path: str, progress_cb=None):
+    def _flash_all(self, spiffs_image: str, progress_cb=None):
+        """Flash firmware + SPIFFS in a single esptool connection."""
+        fw_path = self._get_firmware_path()
+
         cmd = [
             sys.executable, "-m", "esptool",
             "--port", self.port,
             "--baud", "921600",
+            "--before", "default_reset",
+            "--after",  "hard_reset",
             "write_flash",
-            SPIFFS_OFFSET, image_path,
+            "-z",
+            "--flash_mode", "dio",
+            "--flash_freq", "80m",
+            "--flash_size", "detect",
+            FIRMWARE_OFFSET, fw_path,
+            SPIFFS_OFFSET,   spiffs_image,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+
         if result.returncode != 0:
-            raise RuntimeError(f"SPIFFS flash failed:\n{result.stderr}")
+            raise RuntimeError(f"Flash failed:\n{result.stderr}")
+
+        if progress_cb:
+            progress_cb(90, "Firmware + SPIFFS flashed successfully ✓")
 
     def _verify_checksum(self, file_paths: list, progress_cb=None):
-        """MD5 checksum of all files for integrity confirmation."""
         h = hashlib.md5()
         for path in sorted(file_paths):
             with open(path, "rb") as f:
@@ -150,11 +133,8 @@ class ESPFlasher:
             progress_cb(98, f"MD5: {digest[:8]}...  ✓")
         return digest
 
-    # ── Firmware path ─────────────────────────────────────────────────────────
-
     def _get_firmware_path(self) -> str:
-        """Locate bundled firmware .bin file."""
-        # Try importlib.resources first (installed package)
+        # Try importlib.resources (installed package)
         try:
             with importlib.resources.path("esphost.firmware", FIRMWARE_FILENAME) as p:
                 if os.path.exists(p):
